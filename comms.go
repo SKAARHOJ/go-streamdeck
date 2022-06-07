@@ -65,7 +65,7 @@ func RegisterDevicetype(
 type Device struct {
 	fd                   *hid.Device
 	deviceType           deviceType
-	buttonPressListeners []func(int, *Device, error)
+	buttonPressListeners []func(int, *Device, error, bool)
 }
 
 // Open a Streamdeck device, the most common entry point
@@ -110,6 +110,19 @@ func rawOpen(reset bool) (*Device, error) {
 // GetName returns the name of the type of Streamdeck
 func (d *Device) GetName() string {
 	return d.deviceType.name
+}
+
+// GetImageSize returns the size of images on this Streamdeck
+func (d *Device) GetImageSize() image.Point {
+	return d.deviceType.imageSize
+}
+
+func (d *Device) GetNumberOfButtons() uint {
+	return d.deviceType.numberOfButtons
+}
+
+func (d *Device) GetUSBProductId() int {
+	return int(d.deviceType.usbProductID)
 }
 
 // Close the device
@@ -177,6 +190,9 @@ func (d *Device) buttonPressListener() {
 				}
 				buttonMask[i] = true
 			} else {
+				if buttonMask[i] {
+					d.sendButtonReleaseEvent(int(i), nil)
+				}
 				buttonMask[i] = false
 			}
 		}
@@ -185,12 +201,18 @@ func (d *Device) buttonPressListener() {
 
 func (d *Device) sendButtonPressEvent(btnIndex int, err error) {
 	for _, f := range d.buttonPressListeners {
-		f(btnIndex, d, err)
+		f(btnIndex, d, err, true)
+	}
+}
+
+func (d *Device) sendButtonReleaseEvent(btnIndex int, err error) {
+	for _, f := range d.buttonPressListeners {
+		f(btnIndex, d, err, false)
 	}
 }
 
 // ButtonPress registers a callback to be called whenever a button is pressed
-func (d *Device) ButtonPress(f func(int, *Device, error)) {
+func (d *Device) ButtonPress(f func(int, *Device, error, bool)) {
 	d.buttonPressListeners = append(d.buttonPressListeners, f)
 }
 
@@ -256,7 +278,7 @@ func Min(x, y int) int {
 	return y
 }
 
-func Max (x, y int) int {
+func Max(x, y int) int {
 	if x > y {
 		return x
 	}

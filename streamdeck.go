@@ -95,7 +95,7 @@ func (sd *StreamDeck) GetButtonIndex(btnIndex int) Button {
 	return b
 }
 
-func (sd *StreamDeck) pressHandler(btnIndex int, d *Device, err error) {
+func (sd *StreamDeck) pressHandler(btnIndex int, d *Device, err error, pressed bool) {
 	if err != nil {
 		panic(err)
 	}
