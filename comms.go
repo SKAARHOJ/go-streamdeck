@@ -117,6 +117,11 @@ func (d *Device) GetImageSize() image.Point {
 	return d.deviceType.imageSize
 }
 
+// GetImageSize returns the size of images on this Streamdeck
+func (d *Device) HasImageCapability() bool {
+	return d.deviceType.imageSize != image.Point{}
+}
+
 func (d *Device) GetNumberOfButtons() uint {
 	return d.deviceType.numberOfButtons
 }
@@ -155,6 +160,10 @@ func (d *Device) ClearButtons() {
 
 // WriteColorToButton writes a specified color to the given button
 func (d *Device) WriteColorToButton(btnIndex int, colour color.Color) error {
+	if !d.HasImageCapability() {
+		return errors.New("Button doesn't have image capability")
+	}
+
 	img := getSolidColourImage(colour, d.deviceType.imageSize.X)
 	imgForButton, err := getImageForButton(img, d.deviceType.imageFormat)
 	if err != nil {
@@ -165,6 +174,10 @@ func (d *Device) WriteColorToButton(btnIndex int, colour color.Color) error {
 
 // WriteImageToButton writes a specified image file to the given button
 func (d *Device) WriteImageToButton(btnIndex int, filename string) error {
+	if !d.HasImageCapability() {
+		return errors.New("Button doesn't have image capability")
+	}
+
 	img, err := getImageFile(filename)
 	if err != nil {
 		return err
