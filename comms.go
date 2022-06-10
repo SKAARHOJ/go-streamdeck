@@ -25,6 +25,7 @@ type deviceType struct {
 	imageFormat         string
 	imagePayloadPerPage uint
 	imageHeaderFunc     func(bytesRemaining uint, btnIndex uint, pageNumber uint) []byte
+	serial              string
 }
 
 var deviceTypes []deviceType
@@ -91,6 +92,7 @@ func rawOpen(reset bool) (*Device, error) {
 		for _, devType := range deviceTypes {
 			if device.ProductID == devType.usbProductID {
 				retval.deviceType = devType
+				retval.deviceType.serial = device.Serial
 				dev, err := device.Open()
 				if err != nil {
 					return nil, err
@@ -107,6 +109,11 @@ func rawOpen(reset bool) (*Device, error) {
 	return nil, errors.New("Found an Elgato device, but not one for which there is a definition; have you imported the devices package?")
 }
 
+// GetSerial returns the device serial
+func (d *Device) GetSerial() string {
+	return d.deviceType.serial
+}
+
 // GetName returns the name of the type of Streamdeck
 func (d *Device) GetName() string {
 	return d.deviceType.name
@@ -117,7 +124,6 @@ func (d *Device) GetImageSize() image.Point {
 	return d.deviceType.imageSize
 }
 
-// GetImageSize returns the size of images on this Streamdeck
 func (d *Device) HasImageCapability() bool {
 	return d.deviceType.imageSize != image.Point{}
 }
