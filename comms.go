@@ -11,6 +11,12 @@ import (
 
 const vendorID = 0x0fd9
 
+type deviceSearchResult struct {
+	Name      string
+	Serial    string
+	ProductID uint16
+}
+
 // deviceType represents one of the various types of StreamDeck (mini/orig/orig2/xl)
 type deviceType struct {
 	name                string
@@ -71,16 +77,35 @@ type Device struct {
 
 // Open a Streamdeck device, the most common entry point
 func Open() (*Device, error) {
-	return rawOpen(true)
+	return rawOpen(true, "")
+}
+
+// Open a Streamdeck device, the most common entry point
+func OpenBySerial(serial string) (*Device, error) {
+	return rawOpen(true, serial)
+}
+
+// Search for streamdeck devices
+func Search() []*deviceSearchResult {
+	result := []*deviceSearchResult{}
+	devices := hid.Enumerate(vendorID, 0)
+	for _, device := range devices {
+		result = append(result, &deviceSearchResult{
+			ProductID: device.ProductID,
+			Serial:    device.Serial,
+			Name:      device.Product,
+		})
+	}
+	return result
 }
 
 // OpenWithoutReset will open a Streamdeck device, without resetting it
 func OpenWithoutReset() (*Device, error) {
-	return rawOpen(false)
+	return rawOpen(false, "")
 }
 
 // Opens a new StreamdeckXL device, and returns a handle
-func rawOpen(reset bool) (*Device, error) {
+func rawOpen(reset bool, serial string) (*Device, error) {
 	devices := hid.Enumerate(vendorID, 0)
 	if len(devices) == 0 {
 		return nil, errors.New("No elgato devices found")
@@ -91,18 +116,20 @@ func rawOpen(reset bool) (*Device, error) {
 		// Iterate over the known device types, matching to product ID
 		for _, devType := range deviceTypes {
 			if device.ProductID == devType.usbProductID {
-				retval.deviceType = devType
-				retval.deviceType.serial = device.Serial
-				dev, err := device.Open()
-				if err != nil {
-					return nil, err
+				if serial == "" || serial == device.Serial {
+					retval.deviceType = devType
+					retval.deviceType.serial = device.Serial
+					dev, err := device.Open()
+					if err != nil {
+						return nil, err
+					}
+					retval.fd = dev
+					if reset {
+						retval.ResetComms()
+					}
+					go retval.buttonPressListener()
+					return retval, nil
 				}
-				retval.fd = dev
-				if reset {
-					retval.ResetComms()
-				}
-				go retval.buttonPressListener()
-				return retval, nil
 			}
 		}
 	}
@@ -243,6 +270,9 @@ func (d *Device) ResetComms() {
 
 // WriteRawImageToButton takes an `image.Image` and writes it to the given button, after resizing and rotating the image to fit the button (for some reason the StreamDeck screens are all upside down)
 func (d *Device) WriteRawImageToButton(btnIndex int, rawImg image.Image) error {
+	if !d.HasImageCapability() {
+		return errors.New("Button doesn't have image capability")
+	}
 	img := resizeAndRotate(rawImg, d.deviceType.imageSize.X, d.deviceType.imageSize.Y, d.deviceType.name)
 	imgForButton, err := getImageForButton(img, d.deviceType.imageFormat)
 	if err != nil {
