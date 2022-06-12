@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"time"
 
 	"github.com/karalabe/hid"
 )
@@ -222,6 +223,12 @@ func (d *Device) WriteImageToButton(btnIndex int, filename string) error {
 func (d *Device) buttonPressListener() {
 	var buttonMask []bool
 	buttonMask = make([]bool, d.deviceType.numberOfButtons)
+
+	buttonTime := make([]time.Time, d.deviceType.numberOfButtons)
+	for i := range buttonTime {
+		buttonTime[i] = time.Now()
+	}
+
 	for {
 		data := make([]byte, d.deviceType.numberOfButtons+d.deviceType.buttonReadOffset)
 		_, err := d.fd.Read(data)
@@ -231,15 +238,18 @@ func (d *Device) buttonPressListener() {
 		}
 		for i := uint(0); i < d.deviceType.numberOfButtons; i++ {
 			if data[d.deviceType.buttonReadOffset+i] == 1 {
-				if !buttonMask[i] {
-					d.sendButtonPressEvent(int(i), nil)
+				if time.Now().After(buttonTime[i].Add(time.Duration(time.Millisecond * 100))) { // Implement 100 ms debouncing on button presses.
+					if !buttonMask[i] {
+						d.sendButtonPressEvent(int(i), nil)
+						buttonTime[i] = time.Now()
+					}
+					buttonMask[i] = true
 				}
-				buttonMask[i] = true
 			} else {
 				if buttonMask[i] {
 					d.sendButtonReleaseEvent(int(i), nil)
+					buttonMask[i] = false // Putting it here insetad of outside the condition because we ONLY want release events if there has been a Press event first (related to the fact that debouncing above can lead to ignored events)
 				}
-				buttonMask[i] = false
 			}
 		}
 	}
