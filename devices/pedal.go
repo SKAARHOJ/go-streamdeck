@@ -31,6 +31,7 @@ func init() {
 		4,                    // Button read offset
 		"",                   // Image format
 		0,                    // Amount of image payload allowed per USB packet
-		GetImageHeaderPedal,  // Function to get the comms image header
+		nil,
+		GetImageHeaderPedal, // Function to get the comms image header
 	)
 }

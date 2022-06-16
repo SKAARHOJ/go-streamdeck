@@ -33,6 +33,7 @@ type deviceType struct {
 	imagePayloadPerPage uint
 	imageHeaderFunc     func(bytesRemaining uint, btnIndex uint, pageNumber uint) []byte
 	serial              string
+	buttonMap           map[uint]int
 }
 
 var deviceTypes []deviceType
@@ -50,6 +51,7 @@ func RegisterDevicetype(
 	buttonReadOffset uint,
 	imageFormat string,
 	imagePayloadPerPage uint,
+	buttonMap map[uint]int,
 	imageHeaderFunc func(bytesRemaining uint, btnIndex uint, pageNumber uint) []byte,
 ) {
 	d := deviceType{
@@ -64,6 +66,7 @@ func RegisterDevicetype(
 		buttonReadOffset:    buttonReadOffset,
 		imageFormat:         imageFormat,
 		imagePayloadPerPage: imagePayloadPerPage,
+		buttonMap:           buttonMap,
 		imageHeaderFunc:     imageHeaderFunc,
 	}
 	deviceTypes = append(deviceTypes, d)
@@ -115,6 +118,7 @@ func rawOpen(reset bool, serial string) (*Device, error) {
 	retval := &Device{}
 	for _, device := range devices {
 		// Iterate over the known device types, matching to product ID
+		//log.Println(log.Indent(device))
 		for _, devType := range deviceTypes {
 			if device.ProductID == devType.usbProductID {
 				if serial == "" || serial == device.Serial {
@@ -194,6 +198,7 @@ func (d *Device) ClearButtons() {
 
 // WriteColorToButton writes a specified color to the given button
 func (d *Device) WriteColorToButton(btnIndex int, colour color.Color) error {
+	btnIndex = int(d.mapButtonIn(uint(btnIndex)))
 	if !d.HasImageCapability() {
 		return errors.New("Button doesn't have image capability")
 	}
@@ -208,6 +213,7 @@ func (d *Device) WriteColorToButton(btnIndex int, colour color.Color) error {
 
 // WriteImageToButton writes a specified image file to the given button
 func (d *Device) WriteImageToButton(btnIndex int, filename string) error {
+	//btnIndex = int(d.mapButtonIn(uint(btnIndex)))
 	if !d.HasImageCapability() {
 		return errors.New("Button doesn't have image capability")
 	}
@@ -240,19 +246,41 @@ func (d *Device) buttonPressListener() {
 			if data[d.deviceType.buttonReadOffset+i] == 1 {
 				if time.Now().After(buttonTime[i].Add(time.Duration(time.Millisecond * 100))) { // Implement 100 ms debouncing on button presses.
 					if !buttonMask[i] {
-						d.sendButtonPressEvent(int(i), nil)
+						d.sendButtonPressEvent(d.mapButtonOut(i), nil)
 						buttonTime[i] = time.Now()
 					}
 					buttonMask[i] = true
 				}
 			} else {
 				if buttonMask[i] {
-					d.sendButtonReleaseEvent(int(i), nil)
+					d.sendButtonReleaseEvent(d.mapButtonOut(i), nil)
 					buttonMask[i] = false // Putting it here insetad of outside the condition because we ONLY want release events if there has been a Press event first (related to the fact that debouncing above can lead to ignored events)
 				}
 			}
 		}
 	}
+}
+
+func (d *Device) mapButtonOut(btnIndex uint) int {
+	if d.deviceType.buttonMap != nil {
+		if _, exists := d.deviceType.buttonMap[btnIndex]; exists {
+			btnIndex = uint(d.deviceType.buttonMap[btnIndex])
+		}
+	}
+
+	return int(btnIndex)
+}
+
+func (d *Device) mapButtonIn(btnIndex uint) int {
+	if d.deviceType.buttonMap != nil {
+		for out, match := range d.deviceType.buttonMap {
+			if uint(match) == btnIndex {
+				return int(out)
+			}
+		}
+	}
+
+	return int(btnIndex)
 }
 
 func (d *Device) sendButtonPressEvent(btnIndex int, err error) {
@@ -280,6 +308,7 @@ func (d *Device) ResetComms() {
 
 // WriteRawImageToButton takes an `image.Image` and writes it to the given button, after resizing and rotating the image to fit the button (for some reason the StreamDeck screens are all upside down)
 func (d *Device) WriteRawImageToButton(btnIndex int, rawImg image.Image) error {
+	btnIndex = int(d.mapButtonIn(uint(btnIndex)))
 	if !d.HasImageCapability() {
 		return errors.New("Button doesn't have image capability")
 	}
@@ -300,6 +329,8 @@ func (d *Device) rawWriteToButton(btnIndex int, rawImage []byte) error {
 
 	pageNumber := 0
 	bytesRemaining := len(rawImage)
+	halfImage := len(rawImage) / 2
+	bytesSent := 0
 
 	for bytesRemaining > 0 {
 
@@ -308,14 +339,20 @@ func (d *Device) rawWriteToButton(btnIndex int, rawImage []byte) error {
 		imageReportHeaderLength := len(header)
 		imageReportPayloadLength := imageReportLength - imageReportHeaderLength
 
+		if halfImage > imageReportPayloadLength {
+			//			log.Fatalf("image too large: %d", halfImage*2)
+		}
+
 		thisLength := 0
 		if imageReportPayloadLength < bytesRemaining {
-			thisLength = imageReportPayloadLength
+			if d.deviceType.name == "Streamdeck (original)" {
+				thisLength = halfImage
+			} else {
+				thisLength = imageReportPayloadLength
+			}
 		} else {
 			thisLength = bytesRemaining
 		}
-
-		bytesSent := pageNumber * imageReportPayloadLength
 
 		payload := append(header, rawImage[bytesSent:(bytesSent+thisLength)]...)
 		padding := make([]byte, imageReportLength-len(payload))
@@ -325,6 +362,7 @@ func (d *Device) rawWriteToButton(btnIndex int, rawImage []byte) error {
 
 		bytesRemaining = bytesRemaining - thisLength
 		pageNumber = pageNumber + 1
+		bytesSent = bytesSent + thisLength
 	}
 	return nil
 }

@@ -54,6 +54,7 @@ func init() {
 		4,                           // Button read offset
 		"JPEG",                      // Image format
 		ov2ImageReportPayloadLength, // Amount of image payload allowed per USB packet
-		GetImageHeaderOv2,           // Function to get the comms image header
+		nil,
+		GetImageHeaderOv2, // Function to get the comms image header
 	)
 }

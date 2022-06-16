@@ -70,6 +70,7 @@ func init() {
 		1,                            // Button read offset
 		"BMP",                        // Image format
 		miniImageReportPayloadLength, // Amount of image payload allowed per USB packet
-		GetImageHeaderMini,           // Function to get the comms image header
+		nil,
+		GetImageHeaderMini, // Function to get the comms image header
 	)
 }
