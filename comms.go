@@ -254,7 +254,7 @@ func (d *Device) buttonPressListener() {
 			} else {
 				if buttonMask[i] {
 					d.sendButtonReleaseEvent(d.mapButtonOut(i), nil)
-					buttonMask[i] = false // Putting it here insetad of outside the condition because we ONLY want release events if there has been a Press event first (related to the fact that debouncing above can lead to ignored events)
+					buttonMask[i] = false // Putting it here instead of outside the condition because we ONLY want release events if there has been a Press event first (related to the fact that debouncing above can lead to ignored events)
 				}
 			}
 		}

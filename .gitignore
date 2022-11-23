@@ -1,2 +1,3 @@
 vscode-workspace.code-workspace
 .vscode/launch.json
+.DS_Store
