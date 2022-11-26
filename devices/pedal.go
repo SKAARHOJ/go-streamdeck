@@ -33,5 +33,6 @@ func init() {
 		0,                    // Amount of image payload allowed per USB packet
 		nil,
 		GetImageHeaderPedal, // Function to get the comms image header
+		nil,
 	)
 }

@@ -56,5 +56,6 @@ func init() {
 		ov2ImageReportPayloadLength, // Amount of image payload allowed per USB packet
 		nil,
 		GetImageHeaderOv2, // Function to get the comms image header
+		nil,
 	)
 }

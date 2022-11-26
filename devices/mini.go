@@ -72,5 +72,6 @@ func init() {
 		miniImageReportPayloadLength, // Amount of image payload allowed per USB packet
 		nil,
 		GetImageHeaderMini, // Function to get the comms image header
+		nil,
 	)
 }

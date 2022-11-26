@@ -56,5 +56,6 @@ func init() {
 		mk2ImageReportPayloadLength, // Amount of image payload allowed per USB packet
 		nil,
 		GetImageHeaderMk2, // Function to get the comms image header
+		nil,
 	)
 }

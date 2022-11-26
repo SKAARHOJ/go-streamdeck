@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"image/color"
 	"time"
 
@@ -17,7 +16,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("Found device [%s]\n", sd.GetName())
+	//fmt.Printf("Found device [%s]\n", sd.GetName())
 
 	// Button in position 2, changes to "Bye!" at the end of the program
 	// When pressed, this prints "You pressed me" to the terminal

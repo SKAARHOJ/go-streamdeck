@@ -1,6 +1,7 @@
 package streamdeck
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
@@ -32,6 +33,7 @@ type deviceType struct {
 	imageFormat         string
 	imagePayloadPerPage uint
 	imageHeaderFunc     func(bytesRemaining uint, btnIndex uint, pageNumber uint) []byte
+	imageAreaHeaderFunc func(bytesRemaining uint, x, y, width, height uint, pageNumber uint) []byte
 	serial              string
 	buttonMap           map[uint]int
 }
@@ -53,6 +55,7 @@ func RegisterDevicetype(
 	imagePayloadPerPage uint,
 	buttonMap map[uint]int,
 	imageHeaderFunc func(bytesRemaining uint, btnIndex uint, pageNumber uint) []byte,
+	imageAreaHeaderFunc func(bytesRemaining uint, x, y, width, height uint, pageNumber uint) []byte,
 ) {
 	d := deviceType{
 		name:                name,
@@ -68,15 +71,21 @@ func RegisterDevicetype(
 		imagePayloadPerPage: imagePayloadPerPage,
 		buttonMap:           buttonMap,
 		imageHeaderFunc:     imageHeaderFunc,
+		imageAreaHeaderFunc: imageAreaHeaderFunc,
 	}
 	deviceTypes = append(deviceTypes, d)
 }
 
 // Device is a struct which represents an actual Streamdeck device, and holds its reference to the USB HID device
 type Device struct {
-	fd                   *hid.Device
-	deviceType           deviceType
-	buttonPressListeners []func(int, *Device, error, bool)
+	fd         *hid.Device
+	deviceType deviceType
+
+	buttonPressListeners     []func(int, *Device, error, bool)
+	encoderPushListeners     []func(int, *Device, bool)
+	encoderRotationListeners []func(int, *Device, int)
+	touchPushListeners       []func(*Device, uint16, uint16, bool)
+	touchSwipeListeners      []func(*Device, uint16, uint16, uint16, uint16)
 }
 
 // Open a Streamdeck device, the most common entry point
@@ -132,7 +141,7 @@ func rawOpen(reset bool, serial string) (*Device, error) {
 					if reset {
 						retval.ResetComms()
 					}
-					go retval.buttonPressListener()
+					go retval.eventListener()
 					return retval, nil
 				}
 			}
@@ -226,7 +235,7 @@ func (d *Device) WriteImageToButton(btnIndex int, filename string) error {
 	return nil
 }
 
-func (d *Device) buttonPressListener() {
+func (d *Device) eventListener() {
 	var buttonMask []bool
 	buttonMask = make([]bool, d.deviceType.numberOfButtons)
 
@@ -235,26 +244,96 @@ func (d *Device) buttonPressListener() {
 		buttonTime[i] = time.Now()
 	}
 
+	// All for Streamdeck Plus:
+	numberOfEncoders := 4
+	encoderReadOffset := 5
+	encoderButtonTime := make([]time.Time, numberOfEncoders)
+	for i := range encoderButtonTime {
+		encoderButtonTime[i] = time.Now()
+	}
+	var encoderButtonMask []bool
+	encoderButtonMask = make([]bool, numberOfEncoders)
+
 	for {
-		data := make([]byte, d.deviceType.numberOfButtons+d.deviceType.buttonReadOffset)
+		data := make([]byte, 255) // d.deviceType.numberOfButtons+d.deviceType.buttonReadOffset
 		_, err := d.fd.Read(data)
 		if err != nil {
 			d.sendButtonPressEvent(-1, err)
 			break
 		}
-		for i := uint(0); i < d.deviceType.numberOfButtons; i++ {
-			if data[d.deviceType.buttonReadOffset+i] == 1 {
-				if time.Now().After(buttonTime[i].Add(time.Duration(time.Millisecond * 100))) { // Implement 100 ms debouncing on button presses.
-					if !buttonMask[i] {
-						d.sendButtonPressEvent(d.mapButtonOut(i), nil)
-						buttonTime[i] = time.Now()
+
+		if data[0] == 1 { // Seems like the first byte is always one for events...
+			if d.deviceType.name == "Streamdeck Plus" && data[1] > 0 {
+				switch data[1] {
+				case 2: // Touch
+					switch data[4] {
+					case 1: // Tap
+						xpos := binary.LittleEndian.Uint16(data[6:])
+						ypos := binary.LittleEndian.Uint16(data[8:])
+						d.sendTouchPushEvent(xpos, ypos, false)
+					case 2: // Press/Hold
+						xpos := binary.LittleEndian.Uint16(data[6:])
+						ypos := binary.LittleEndian.Uint16(data[8:])
+						d.sendTouchPushEvent(xpos, ypos, true)
+					case 3: // Swipe
+						xstart := binary.LittleEndian.Uint16(data[6:])
+						ystart := binary.LittleEndian.Uint16(data[8:])
+						xstop := binary.LittleEndian.Uint16(data[10:])
+						ystop := binary.LittleEndian.Uint16(data[12:])
+						/*						fmt.Printf("SWIPE: xstart=%d, ystart=%d, xstop=%d, ystop=%d; %s,%s\n", xstart, ystart, xstop, ystop,
+												su.Qstr((int(xstop)-int(xstart)) > 0, "Right", "Left"), su.Qstr((int(ystop)-int(ystart)) < 0, "Up", "Down"))
+						*/
+						d.sendTouchSwipeEvent(xstart, ystart, xstop, ystop)
 					}
-					buttonMask[i] = true
+				case 3: // Encoders
+					switch data[4] {
+					case 1: // Rotate
+						for i := 0; i < numberOfEncoders; i++ {
+							if data[encoderReadOffset+i] > 0 {
+								rev := int(data[encoderReadOffset+i])
+								if rev > 127 {
+									rev = rev - 256
+								}
+								d.sendEncoderRotateEvent(i, rev)
+							}
+						}
+					case 0: // Press
+						for i := 0; i < numberOfEncoders; i++ {
+							if data[encoderReadOffset+i] == 1 {
+								if time.Now().After(encoderButtonTime[i].Add(time.Duration(time.Millisecond * 100))) { // Implement 100 ms debouncing on button presses.
+									if !encoderButtonMask[i] {
+										d.sendEncoderPushEvent(i, true)
+										encoderButtonTime[i] = time.Now()
+									}
+									encoderButtonMask[i] = true
+								}
+							} else {
+								if encoderButtonMask[i] {
+									d.sendEncoderPushEvent(i, false)
+									encoderButtonMask[i] = false // Putting it here instead of outside the condition because we ONLY want release events if there has been a Press event first (related to the fact that debouncing above can lead to ignored events)
+								}
+							}
+
+						}
+					}
 				}
 			} else {
-				if buttonMask[i] {
-					d.sendButtonReleaseEvent(d.mapButtonOut(i), nil)
-					buttonMask[i] = false // Putting it here instead of outside the condition because we ONLY want release events if there has been a Press event first (related to the fact that debouncing above can lead to ignored events)
+				// Standard button stuff
+				for i := uint(0); i < d.deviceType.numberOfButtons; i++ {
+					if data[d.deviceType.buttonReadOffset+i] == 1 {
+						if time.Now().After(buttonTime[i].Add(time.Duration(time.Millisecond * 100))) { // Implement 100 ms debouncing on button presses.
+							if !buttonMask[i] {
+								d.sendButtonPressEvent(d.mapButtonOut(i), nil)
+								buttonTime[i] = time.Now()
+							}
+							buttonMask[i] = true
+						}
+					} else {
+						if buttonMask[i] {
+							d.sendButtonReleaseEvent(d.mapButtonOut(i), nil)
+							buttonMask[i] = false // Putting it here instead of outside the condition because we ONLY want release events if there has been a Press event first (related to the fact that debouncing above can lead to ignored events)
+						}
+					}
 				}
 			}
 		}
@@ -295,9 +374,53 @@ func (d *Device) sendButtonReleaseEvent(btnIndex int, err error) {
 	}
 }
 
-// ButtonPress registers a callback to be called whenever a button is pressed
+func (d *Device) sendEncoderPushEvent(btnIndex int, pressed bool) {
+	for _, f := range d.encoderPushListeners {
+		f(btnIndex, d, pressed)
+	}
+}
+
+func (d *Device) sendEncoderRotateEvent(btnIndex int, pulses int) {
+	for _, f := range d.encoderRotationListeners {
+		f(btnIndex, d, pulses)
+	}
+}
+
+func (d *Device) sendTouchPushEvent(xpos, ypos uint16, hold bool) {
+	for _, f := range d.touchPushListeners {
+		f(d, xpos, ypos, hold)
+	}
+}
+
+func (d *Device) sendTouchSwipeEvent(xstart, ystart, xstop, ystop uint16) {
+	for _, f := range d.touchSwipeListeners {
+		f(d, xstart, ystart, xstop, ystop)
+	}
+}
+
+// ButtonPress registers a callback to be called whenever a button is pressed (or connection is lost!)
 func (d *Device) ButtonPress(f func(int, *Device, error, bool)) {
 	d.buttonPressListeners = append(d.buttonPressListeners, f)
+}
+
+// EncoderPress registers a callback to be called whenever an encoder is pressed
+func (d *Device) EncoderPress(f func(int, *Device, bool)) {
+	d.encoderPushListeners = append(d.encoderPushListeners, f)
+}
+
+// EncoderRotate registers a callback to be called whenever an encoder is rotated
+func (d *Device) EncoderRotate(f func(int, *Device, int)) {
+	d.encoderRotationListeners = append(d.encoderRotationListeners, f)
+}
+
+// TouchPush registers a callback to be called whenever the touch area is pushed (tap or hold)
+func (d *Device) TouchPush(f func(*Device, uint16, uint16, bool)) {
+	d.touchPushListeners = append(d.touchPushListeners, f)
+}
+
+// TouchSwipe registers a callback to be called whenever the touch area is swiped
+func (d *Device) TouchSwipe(f func(*Device, uint16, uint16, uint16, uint16)) {
+	d.touchSwipeListeners = append(d.touchSwipeListeners, f)
 }
 
 // ResetComms will reset the comms protocol to the StreamDeck; useful if things have gotten de-synced, but it will also reboot the StreamDeck
@@ -351,6 +474,46 @@ func (d *Device) rawWriteToButton(btnIndex int, rawImage []byte) error {
 				thisLength = imageReportPayloadLength
 			}
 		} else {
+			thisLength = bytesRemaining
+		}
+
+		payload := append(header, rawImage[bytesSent:(bytesSent+thisLength)]...)
+		padding := make([]byte, imageReportLength-len(payload))
+
+		thingToSend := append(payload, padding...)
+		d.fd.Write(thingToSend)
+
+		bytesRemaining = bytesRemaining - thisLength
+		pageNumber = pageNumber + 1
+		bytesSent = bytesSent + thisLength
+	}
+	return nil
+}
+
+// y doesn't work, keep it zero!
+func (d *Device) WriteRawImageToAreaUnscaled(x, y int, rawImg image.Image) error {
+	imgForButton, err := getImageForButton(rawImg, d.deviceType.imageFormat)
+	if err != nil {
+		return err
+	}
+	return d.rawWriteToArea(x, y, rawImg.Bounds().Max.X, rawImg.Bounds().Max.Y, imgForButton)
+}
+
+// y doesn't work, keep it zero!
+func (d *Device) rawWriteToArea(x, y, width, height int, rawImage []byte) error {
+	pageNumber := 0
+	bytesRemaining := len(rawImage)
+	bytesSent := 0
+
+	for bytesRemaining > 0 {
+
+		header := d.deviceType.imageAreaHeaderFunc(uint(bytesRemaining), uint(x), uint(y), uint(width), uint(height), uint(pageNumber))
+		imageReportLength := int(d.deviceType.imagePayloadPerPage)
+		imageReportHeaderLength := len(header)
+		imageReportPayloadLength := imageReportLength - imageReportHeaderLength
+
+		thisLength := imageReportPayloadLength
+		if imageReportPayloadLength > bytesRemaining {
 			thisLength = bytesRemaining
 		}
 

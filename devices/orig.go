@@ -78,5 +78,6 @@ func init() {
 			10: 14,
 		},
 		GetImageHeaderOriginal, // Function to get the comms image header
+		nil,
 	)
 }
