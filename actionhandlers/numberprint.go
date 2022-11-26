@@ -2,7 +2,8 @@ package actionhandlers
 
 import (
 	"fmt"
-	streamdeck "github.com/magicmonkey/go-streamdeck"
+
+	streamdeck "github.com/SKAARHOJ/go-streamdeck"
 )
 
 type NumberPrintAction struct {

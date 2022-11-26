@@ -2,7 +2,7 @@
 
 A Go interface to an Elgato Streamdeck (currently works with the 32-button XL only because that's what I have).
 
-[![GoDoc](https://godoc.org/github.com/magicmonkey/go-streamdeck?status.svg)](https://godoc.org/github.com/magicmonkey/go-streamdeck)
+[![GoDoc](https://godoc.org/github.com/SKAARHOJ/go-streamdeck?status.svg)](https://godoc.org/github.com/SKAARHOJ/go-streamdeck)
 
 _Designed for and tested with Ubuntu, Go 1.13+ and a Streamdeck XL. Images are the wrong size for other streamdecks; bug reports and patches are welcome!_
 
@@ -18,7 +18,7 @@ _Designed for and tested with Ubuntu, Go 1.13+ and a Streamdeck XL. Images are t
 Either include the library in your project or install it with the following command:
 
 ```
-go get github.com/magicmonkey/go-streamdeck
+go get github.com/SKAARHOJ/go-streamdeck
 ```
 
 On Linux, you might also need to add some `udev` rules.  Put this into `/etc/udev/rules.d/99-streamdeck.rules`:
@@ -52,10 +52,10 @@ import (
 	"image/color"
 	"time"
 
-	streamdeck "github.com/magicmonkey/go-streamdeck"
-	"github.com/magicmonkey/go-streamdeck/actionhandlers"
-	"github.com/magicmonkey/go-streamdeck/buttons"
-	_ "github.com/magicmonkey/go-streamdeck/devices"
+	streamdeck "github.com/SKAARHOJ/go-streamdeck"
+	"github.com/SKAARHOJ/go-streamdeck/actionhandlers"
+	"github.com/SKAARHOJ/go-streamdeck/buttons"
+	_ "github.com/SKAARHOJ/go-streamdeck/devices"
 )
 
 func main() {
@@ -99,7 +99,7 @@ The low-level usage gives more control over the operations of the streamdeck and
 This example shows an image on any pressed button, updating each time another button is pressed.
 
 ```go
-import streamdeck "github.com/magicmonkey/go-streamdeck"
+import streamdeck "github.com/SKAARHOJ/go-streamdeck"
 
 func main() {
 	sd, err := streamdeck.Open()

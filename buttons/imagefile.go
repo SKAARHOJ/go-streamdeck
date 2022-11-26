@@ -1,12 +1,13 @@
 package buttons
 
 import (
-	"github.com/disintegration/gift"
 	"image"
 	"image/draw"
 	"os"
 
-	streamdeck "github.com/magicmonkey/go-streamdeck"
+	"github.com/disintegration/gift"
+
+	streamdeck "github.com/SKAARHOJ/go-streamdeck"
 )
 
 // ImageFileButton represents a button with an image on it, where the image is loaded

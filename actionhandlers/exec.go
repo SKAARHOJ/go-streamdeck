@@ -1,8 +1,9 @@
 package actionhandlers
 
 import (
-	streamdeck "github.com/magicmonkey/go-streamdeck"
 	"os/exec"
+
+	streamdeck "github.com/SKAARHOJ/go-streamdeck"
 )
 
 type ExecAction struct {

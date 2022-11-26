@@ -5,11 +5,11 @@ import (
 	"strconv"
 	"sync"
 
-	streamdeck "github.com/magicmonkey/go-streamdeck"
-	"github.com/magicmonkey/go-streamdeck/actionhandlers"
-	"github.com/magicmonkey/go-streamdeck/buttons"
-	"github.com/magicmonkey/go-streamdeck/decorators"
-	_ "github.com/magicmonkey/go-streamdeck/devices"
+	streamdeck "github.com/SKAARHOJ/go-streamdeck"
+	"github.com/SKAARHOJ/go-streamdeck/actionhandlers"
+	"github.com/SKAARHOJ/go-streamdeck/buttons"
+	"github.com/SKAARHOJ/go-streamdeck/decorators"
+	_ "github.com/SKAARHOJ/go-streamdeck/devices"
 )
 
 func main() {

@@ -7,9 +7,9 @@ import (
 
 	"golang.org/x/image/font/gofont/gomedium"
 
+	streamdeck "github.com/SKAARHOJ/go-streamdeck"
 	"github.com/golang/freetype"
 	"github.com/golang/freetype/truetype"
-	streamdeck "github.com/magicmonkey/go-streamdeck"
 )
 
 // TextButton represents a button with text on it
@@ -123,7 +123,7 @@ func getImageWithText(text string, textColour color.Color, backgroundColour colo
 	c.SetClip(dstImg.Bounds())
 
 	x := int((btnSize - width) / 2) // Horizontally centre text
-	y := int(50 + (size / 3))  // Fudged vertical centre, erm, very "heuristic"
+	y := int(50 + (size / 3))       // Fudged vertical centre, erm, very "heuristic"
 
 	pt := freetype.Pt(x, y)
 	c.DrawString(text, pt)

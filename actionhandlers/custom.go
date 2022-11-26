@@ -1,6 +1,6 @@
 package actionhandlers
 
-import streamdeck "github.com/magicmonkey/go-streamdeck"
+import streamdeck "github.com/SKAARHOJ/go-streamdeck"
 
 type CustomAction struct {
 	handler func(streamdeck.Button)
