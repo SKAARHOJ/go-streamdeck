@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/karalabe/hid"
+	log "github.com/s00500/env_logger"
 )
 
 const vendorID = 0x0fd9
@@ -127,7 +128,7 @@ func rawOpen(reset bool, serial string) (*Device, error) {
 	retval := &Device{}
 	for _, device := range devices {
 		// Iterate over the known device types, matching to product ID
-		//log.Println(log.Indent(device))
+		log.Debugln(log.Indent(device))
 		for _, devType := range deviceTypes {
 			if device.ProductID == devType.usbProductID {
 				if serial == "" || serial == device.Serial {
