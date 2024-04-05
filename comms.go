@@ -129,7 +129,6 @@ func rawOpen(reset bool, serial string) (*Device, error) {
 	for _, device := range devices {
 		// Iterate over the known device types, matching to product ID
 		log.Debugln(log.Indent(device))
-		log.Debugln("deviceTypes", len(deviceTypes), log.Indent(deviceTypes))
 		for _, devType := range deviceTypes {
 			if device.ProductID == devType.usbProductID {
 				if serial == "" || serial == device.Serial {
