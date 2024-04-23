@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"time"
 
+	"github.com/disintegration/gift"
 	"github.com/karalabe/hid"
 	log "github.com/s00500/env_logger"
 )
@@ -493,10 +494,19 @@ func (d *Device) rawWriteToButton(btnIndex int, rawImage []byte) error {
 
 // y doesn't work, keep it zero!
 func (d *Device) WriteRawImageToAreaUnscaled(x, y int, rawImg image.Image) error {
-	imgForButton, err := getImageForButton(rawImg, d.deviceType.imageFormat)
+	img := rawImg
+	if d.GetName() == "Streamdeck Neo" { // Rotate Info Display for Streamdeck Neo
+		g := gift.New(gift.Rotate180())
+		newimg := image.NewRGBA(g.Bounds(rawImg.Bounds()))
+		g.Draw(newimg, rawImg)
+		img = newimg
+	}
+
+	imgForButton, err := getImageForButton(img, d.deviceType.imageFormat)
 	if err != nil {
 		return err
 	}
+
 	return d.rawWriteToArea(x, y, rawImg.Bounds().Max.X, rawImg.Bounds().Max.Y, imgForButton)
 }
 
