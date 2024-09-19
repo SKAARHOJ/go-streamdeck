@@ -34,6 +34,10 @@ func deviceSpecifics(devName string, width, height int) (*gift.GIFT, error) {
 		return gift.New(
 			gift.Resize(width, height, gift.LanczosResampling),
 		), nil
+	case "Streamdeck Studio":
+		return gift.New(
+			gift.Resize(width, height, gift.LanczosResampling),
+		), nil
 	case "Streamdeck Neo":
 		return gift.New(
 			gift.Resize(width, height, gift.LanczosResampling),

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"time"
 
 	"github.com/disintegration/gift"
@@ -88,6 +89,7 @@ type Device struct {
 	encoderRotationListeners []func(int, *Device, int)
 	touchPushListeners       []func(*Device, uint16, uint16, bool)
 	touchSwipeListeners      []func(*Device, uint16, uint16, uint16, uint16)
+	nfcListeners             []func(*Device, []byte)
 }
 
 // Open a Streamdeck device, the most common entry point
@@ -222,6 +224,48 @@ func (d *Device) WriteColorToButton(btnIndex int, colour color.Color) error {
 	return d.rawWriteToButton(btnIndex, imgForButton)
 }
 
+// WriteEncoderColor sets the color of an encoder
+func (d *Device) WriteColorToEncoder(encIndex int, colour color.Color) {
+	// Use the RGBA method to get the color components in the range of 0 to 65535.
+	r16, g16, b16, _ := colour.RGBA()
+
+	usbdata := make([]byte, 1024)
+	usbdata[0] = 0x02
+	usbdata[1] = 0x10
+	usbdata[2] = byte(encIndex)  // Enc 0 or 1
+	usbdata[3] = uint8(r16 >> 8) // R
+	usbdata[4] = uint8(g16 >> 8) // G
+	usbdata[5] = uint8(b16 >> 8) // B
+
+	d.fd.Write(usbdata)
+}
+
+// WriteEncoderColor sets the color of an encoder
+func (d *Device) WriteColorToEncoderRing(encIndex int, colours []color.Color, offset uint16) {
+
+	usbdata := make([]byte, 1024)
+	usbdata[0] = 0x02
+	usbdata[1] = 0x0f
+	usbdata[2] = byte(encIndex) // Enc 0 or 1
+
+	for a, colour := range colours {
+		if encIndex == 1 {
+			a += 12 // Right encoder ring is offset by 12 elements.
+		}
+		a += int(offset)
+		a = a % 24
+
+		// Use the RGBA method to get the color components in the range of 0 to 65535.
+		r16, g16, b16, _ := colour.RGBA()
+
+		usbdata[3+a*3] = uint8(r16 >> 8) // R
+		usbdata[4+a*3] = uint8(g16 >> 8) // G
+		usbdata[5+a*3] = uint8(b16 >> 8) // B
+	}
+
+	d.fd.Write(usbdata)
+}
+
 // WriteImageToButton writes a specified image file to the given button
 func (d *Device) WriteImageToButton(btnIndex int, filename string) error {
 	//btnIndex = int(d.mapButtonIn(uint(btnIndex)))
@@ -265,8 +309,15 @@ func (d *Device) eventListener() {
 		}
 
 		if data[0] == 1 { // Seems like the first byte is always one for events...
-			if d.deviceType.name == "Streamdeck Plus" && data[1] > 0 {
+			if (d.deviceType.name == "Streamdeck Plus" || d.deviceType.name == "Streamdeck Studio") && data[1] > 0 {
 				switch data[1] {
+				case 4: // NFC
+					chars := binary.LittleEndian.Uint16(data[2:])
+					if len(data) > int(4+chars) {
+						NFCstring := data[4 : 4+chars]
+						//log.Println(NFCstring)
+						d.sendNFCEvent(NFCstring)
+					}
 				case 2: // Touch
 					switch data[4] {
 					case 1: // Tap
@@ -400,6 +451,12 @@ func (d *Device) sendTouchSwipeEvent(xstart, ystart, xstop, ystop uint16) {
 	}
 }
 
+func (d *Device) sendNFCEvent(nfcdata []byte) {
+	for _, f := range d.nfcListeners {
+		f(d, nfcdata)
+	}
+}
+
 // ButtonPress registers a callback to be called whenever a button is pressed (or connection is lost!)
 func (d *Device) ButtonPress(f func(int, *Device, error, bool)) {
 	d.buttonPressListeners = append(d.buttonPressListeners, f)
@@ -425,10 +482,66 @@ func (d *Device) TouchSwipe(f func(*Device, uint16, uint16, uint16, uint16)) {
 	d.touchSwipeListeners = append(d.touchSwipeListeners, f)
 }
 
+// NFC registers a callback to be called whenever the NFC reader is used
+func (d *Device) NFCdata(f func(*Device, []byte)) {
+	d.nfcListeners = append(d.nfcListeners, f)
+}
+
 // ResetComms will reset the comms protocol to the StreamDeck; useful if things have gotten de-synced, but it will also reboot the StreamDeck
 func (d *Device) ResetComms() {
 	payload := d.deviceType.resetPacket
 	d.fd.SendFeatureReport(payload)
+}
+
+// generateStripedImage creates an image with alternating colored patterns (horizontal, vertical, or checkerboard)
+// The `mode` parameter determines the pattern:
+// mode 0 = horizontal stripes
+// mode 1 = vertical stripes
+// mode 2 = checkerboard
+func generateStripedImage(width, height int, mode int) image.Image {
+	// Define the colors to use
+	colors := []color.Color{
+		color.White, // White
+		color.Black, // Black
+	}
+
+	// Create a new blank RGBA image
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	numColors := len(colors)
+
+	// Draw the pattern based on the mode
+	switch mode {
+	case 0:
+		// Horizontal stripes: Each stripe is 1 pixel high, repeat through the image height
+		for y := 0; y < height; y++ {
+			colorIndex := y % numColors // Cycle through the colors
+			for x := 0; x < width; x++ {
+				img.Set(x, y, colors[colorIndex])
+			}
+		}
+	case 1:
+		// Vertical stripes: Each stripe is 1 pixel wide, repeat through the image width
+		for x := 0; x < width; x++ {
+			colorIndex := x % numColors // Cycle through the colors
+			for y := 0; y < height; y++ {
+				img.Set(x, y, colors[colorIndex])
+			}
+		}
+	case 2:
+		// Checkerboard: Alternate colors both horizontally and vertically
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				colorIndex := (x + y) % numColors // Cycle colors in a checkerboard pattern
+				img.Set(x, y, colors[colorIndex])
+			}
+		}
+	default:
+		// Default case: return a blank image if an unsupported mode is passed
+		draw.Draw(img, img.Bounds(), &image.Uniform{color.White}, image.Point{}, draw.Src)
+	}
+
+	return img
 }
 
 // WriteRawImageToButton takes an `image.Image` and writes it to the given button, after resizing and rotating the image to fit the button (for some reason the StreamDeck screens are all upside down)
@@ -438,6 +551,11 @@ func (d *Device) WriteRawImageToButton(btnIndex int, rawImg image.Image) error {
 		return errors.New("Button doesn't have image capability")
 	}
 	img := resizeAndRotate(rawImg, d.deviceType.imageSize.X, d.deviceType.imageSize.Y, d.deviceType.name)
+	// img := generateStripedImage(d.deviceType.imageSize.X, d.deviceType.imageSize.Y, 2) // Alternative for discovering resolutions...
+	// log.Println("Image size: ", d.deviceType.imageSize.X, d.deviceType.imageSize.Y)
+	// d.deviceType.imageSize.Y++
+	// d.deviceType.imageSize.X++
+
 	imgForButton, err := getImageForButton(img, d.deviceType.imageFormat)
 	if err != nil {
 		return err
