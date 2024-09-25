@@ -2,16 +2,20 @@ package streamdeck
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
+	"net"
 	"time"
+	"unicode"
 
 	"github.com/disintegration/gift"
 	"github.com/karalabe/hid"
 	log "github.com/s00500/env_logger"
+	"go.uber.org/atomic"
 )
 
 const vendorID = 0x0fd9
@@ -79,10 +83,18 @@ func RegisterDevicetype(
 	deviceTypes = append(deviceTypes, d)
 }
 
+type DeviceInterface interface {
+	Close() error
+	SendFeatureReport([]byte) (int, error)
+	Write([]byte) (int, error)
+	Read([]byte) (int, error)
+}
+
 // Device is a struct which represents an actual Streamdeck device, and holds its reference to the USB HID device
 type Device struct {
-	fd         *hid.Device
+	fd         DeviceInterface
 	deviceType deviceType
+	isIP       bool
 
 	buttonPressListeners     []func(int, *Device, error, bool)
 	encoderPushListeners     []func(int, *Device, bool)
@@ -121,7 +133,7 @@ func OpenWithoutReset() (*Device, error) {
 	return rawOpen(false, "")
 }
 
-// Opens a new StreamdeckXL device, and returns a handle
+// Opens a new Streamdeck device, and returns a handle
 func rawOpen(reset bool, serial string) (*Device, error) {
 	devices := hid.Enumerate(vendorID, 0)
 	if len(devices) == 0 {
@@ -152,6 +164,61 @@ func rawOpen(reset bool, serial string) (*Device, error) {
 		}
 	}
 	return nil, errors.New("Found an Elgato device, but not one for which there is a definition; have you imported the devices package?")
+}
+
+// Open a Stream Deck device (Stream Deck Studio) on TCP
+func OpenTCP(IP string) (*Device, error) {
+
+	// Server address and port
+	serverAddr := IP + ":5343"
+
+	// Connect to the TCP server in the Stream Deck
+	conn, err := net.Dial("tcp", serverAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Asking for serial:
+	response := make([]byte, 1024)
+	response[0] = 0x03
+	response[1] = 0x84 // 0x81: A version number (1.00.002), 0x82: another version number (1.05.004), 0x83: another version number (1.05.008), 0x84: Serial, 0x85. Buttons asks for 84, 87, 81, 83, 86, 8a,
+	_, err = conn.Write(response)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reading reply for Serial:
+	data := make([]byte, 1024) // 1024 for TCP, 256 was enough for USB
+	n, err := conn.Read(data)
+	if err != nil {
+		return nil, err
+	}
+	// printDataAsHex(data)
+
+	// Further more, Bitfocus Buttons sends hex sequences 03 22 01, 03 08 32 (brightness), 02 10 00 (turn off encoder light), 02 10 01 (turn off encoder light), 03 05 01, 03 05, 03 1a, 03 08 64 (brightness)
+
+	chars := binary.BigEndian.Uint16(data[2:]) // Length:
+	serialNumber := ""
+	if data[0] == 0x03 && data[1] == 0x84 && n > int(4+chars) {
+		serialNumber = string(data[4 : 4+chars])
+	}
+	log.Printf("Connected to Stream Deck at IP %s with serial %v\n", serverAddr, serialNumber)
+
+	retval := &Device{}
+	for _, devType := range deviceTypes {
+		if devType.usbProductID == 0xaa { // Stream Deck Studio assumed...
+
+			retval.deviceType = devType
+			retval.isIP = true
+			retval.deviceType.serial = serialNumber //"IP_" + IP // Temp-serial...
+
+			retval.fd = &TCPClient{conn: conn}
+
+			go retval.eventListener()
+			return retval, nil
+		}
+	}
+	return nil, errors.New("Unknown error")
 }
 
 // GetSerial returns the device serial
@@ -300,17 +367,56 @@ func (d *Device) eventListener() {
 	var encoderButtonMask []bool
 	encoderButtonMask = make([]bool, numberOfEncoders)
 
+	var lastIncomingDataTime atomic.Time
+	lastIncomingDataTime.Store(time.Now())
+
+	// Start a goroutine to monitor for timeout of incoming data in case we are on an IP connection:
+	if d.isIP {
+		go func() {
+			for {
+				time.Sleep(1 * time.Second) // Check every second
+				// Load the last data time atomically
+				lastTime := lastIncomingDataTime.Load()
+				if time.Since(lastTime) > 5*time.Second {
+					log.Println("No data received within 5 seconds, closing connection")
+					d.fd.Close()
+					return
+				}
+			}
+		}()
+	}
+
 	for {
-		data := make([]byte, 255) // d.deviceType.numberOfButtons+d.deviceType.buttonReadOffset
+
+		// Incoming buffer:
+		data := make([]byte, 1024) // 1024 for TCP, 256 was enough for USB
 		_, err := d.fd.Read(data)
+
 		if err != nil {
+			log.Printf("Error reading from connection: %v\n", err)
 			d.sendButtonPressEvent(-1, err)
 			break
 		}
-
 		if data[0] == 1 { // Seems like the first byte is always one for events...
-			if (d.deviceType.name == "Streamdeck Plus" || d.deviceType.name == "Streamdeck Studio") && data[1] > 0 {
+			if (d.deviceType.name == "Streamdeck Plus" || d.deviceType.name == "Streamdeck Studio") && data[1] > 0 { // We should basically be able to avoid this condition and just have one big switch...
 				switch data[1] {
+				case 0xa: // Assumed "Keep alive" on the Stream Deck Studio:
+					//log.Println("Received assumed keep alive from Stream Deck - sending back 03 1a reply")
+					lastIncomingDataTime.Store(time.Now())
+
+					// Prepare the response: "03 1a" followed by zeroes to make it 1024 bytes long
+					response := make([]byte, 1024)
+					response[0] = 0x03
+					response[1] = 0x1a
+
+					// Send the response back to the server
+					_, err = d.fd.Write(response)
+					if err != nil {
+						log.Printf("Error sending keep alive response to server: %v\n", err)
+						d.sendButtonPressEvent(-1, err)
+						break
+					}
+
 				case 4: // NFC
 					chars := binary.LittleEndian.Uint16(data[2:])
 					if len(data) > int(4+chars) {
@@ -672,4 +778,24 @@ func Max(x, y int) int {
 		return x
 	}
 	return y
+}
+
+// printDataAsHex prints the given byte slice as hex pairs with a space in between and prints the ASCII equivalent, replacing non-printable characters with a dot.
+func printDataAsHex(data []byte) {
+	// Print hex values
+	hexData := hex.EncodeToString(data)
+	for i := 0; i < len(hexData); i += 2 {
+		fmt.Printf("%s ", hexData[i:i+2])
+	}
+	fmt.Println()
+
+	// Print ASCII values, replacing non-printable characters with a dot (.)
+	for _, b := range data {
+		if unicode.IsPrint(rune(b)) {
+			fmt.Printf("%c", b)
+		} else {
+			fmt.Printf(".")
+		}
+	}
+	fmt.Println()
 }
