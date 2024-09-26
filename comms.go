@@ -187,21 +187,25 @@ func OpenTCP(IP string) (*Device, error) {
 		return nil, err
 	}
 
-	// Reading reply for Serial:
-	data := make([]byte, 1024) // 1024 for TCP, 256 was enough for USB
-	n, err := conn.Read(data)
-	if err != nil {
-		return nil, err
-	}
-	// printDataAsHex(data)
-
-	// Further more, Bitfocus Buttons sends hex sequences 03 22 01, 03 08 32 (brightness), 02 10 00 (turn off encoder light), 02 10 01 (turn off encoder light), 03 05 01, 03 05, 03 1a, 03 08 64 (brightness)
-
-	chars := binary.BigEndian.Uint16(data[2:]) // Length:
 	serialNumber := ""
-	if data[0] == 0x03 && data[1] == 0x84 && n > int(4+chars) {
-		serialNumber = string(data[4 : 4+chars])
+
+	for serialNumber == "" {
+		// Reading reply for Serial:
+		data := make([]byte, 1024) // 1024 for TCP, 256 was enough for USB
+		n, err := conn.Read(data)
+		if err != nil {
+			return nil, err
+		}
+		// printDataAsHex(data)
+
+		// Further more, Bitfocus Buttons sends hex sequences 03 22 01, 03 08 32 (brightness), 02 10 00 (turn off encoder light), 02 10 01 (turn off encoder light), 03 05 01, 03 05, 03 1a, 03 08 64 (brightness)
+
+		chars := binary.BigEndian.Uint16(data[2:]) // Length:
+		if data[0] == 0x03 && data[1] == 0x84 && n > int(4+chars) {
+			serialNumber = string(data[4 : 4+chars])
+		}
 	}
+
 	log.Printf("Connected to Stream Deck at IP %s with serial %v\n", serverAddr, serialNumber)
 
 	retval := &Device{}
