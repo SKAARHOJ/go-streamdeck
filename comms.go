@@ -12,8 +12,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/SKAARHOJ/hid"
 	"github.com/disintegration/gift"
-	"github.com/karalabe/hid"
 	log "github.com/s00500/env_logger"
 	"go.uber.org/atomic"
 )
