@@ -3,7 +3,7 @@ module github.com/SKAARHOJ/go-streamdeck
 go 1.13
 
 require (
-	github.com/SKAARHOJ/hid v1.0.1-rollback.0.20250522194354-ec55c441c392
+	github.com/SKAARHOJ/hid v1.0.1-rollback.0.20250522194901-fc14bf15235a
 	github.com/disintegration/gift v1.2.1
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0
 	github.com/s00500/env_logger v0.1.29
