@@ -1,5 +1,5 @@
-github.com/SKAARHOJ/hid v1.0.1-rollback.0.20250522194901-fc14bf15235a h1:BSALxijmHviZxH89yEdLI09aAsUA67inOLZnHm9OWNg=
-github.com/SKAARHOJ/hid v1.0.1-rollback.0.20250522194901-fc14bf15235a/go.mod h1:GgjyAS4pn+jM8eMvCSaTjnRNr8A9xay3OCOf/GmMZPE=
+github.com/SKAARHOJ/hid v1.1.0 h1:dhjvchjDjKhrXpDlOqq+uzKaazLtJKo1Lskj0Cklcyo=
+github.com/SKAARHOJ/hid v1.1.0/go.mod h1:GgjyAS4pn+jM8eMvCSaTjnRNr8A9xay3OCOf/GmMZPE=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
