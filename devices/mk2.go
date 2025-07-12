@@ -58,4 +58,40 @@ func init() {
 		GetImageHeaderMk2, // Function to get the comms image header
 		nil,
 	)
+
+	// MK2 module:
+	streamdeck.RegisterDevicetype(
+		mk2Name, // Name
+		image.Point{X: int(mk2ButtonWidth), Y: int(mk2ButtonHeight)}, // Width/height of a button
+		0xB9,                        // USB productID
+		resetPacket32(),             // Reset packet
+		15,                          // Number of buttons
+		3,                           // Number of rows
+		5,                           // Number of columns
+		brightnessPacket32(),        // Set brightness packet preamble
+		4,                           // Button read offset
+		"JPEG",                      // Image format
+		mk2ImageReportPayloadLength, // Amount of image payload allowed per USB packet
+		nil,
+		GetImageHeaderMk2, // Function to get the comms image header
+		nil,
+	)
+
+	// MK2 Scissor keys:
+	streamdeck.RegisterDevicetype(
+		mk2Name, // Name
+		image.Point{X: int(mk2ButtonWidth), Y: int(mk2ButtonHeight)}, // Width/height of a button
+		0xA5,                        // USB productID
+		resetPacket32(),             // Reset packet
+		15,                          // Number of buttons
+		3,                           // Number of rows
+		5,                           // Number of columns
+		brightnessPacket32(),        // Set brightness packet preamble
+		4,                           // Button read offset
+		"JPEG",                      // Image format
+		mk2ImageReportPayloadLength, // Amount of image payload allowed per USB packet
+		nil,
+		GetImageHeaderMk2, // Function to get the comms image header
+		nil,
+	)
 }
