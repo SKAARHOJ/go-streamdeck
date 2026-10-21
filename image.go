@@ -34,6 +34,11 @@ func deviceSpecifics(devName string, width, height int) (*gift.GIFT, error) {
 		return gift.New(
 			gift.Resize(width, height, gift.LanczosResampling),
 		), nil
+	case "Streamdeck Plus XL": // Images are rotated 90 degrees counter-clockwise (from Elgato's HID documentation, not verified on hardware)
+		return gift.New(
+			gift.Resize(width, height, gift.LanczosResampling),
+			gift.Rotate90(),
+		), nil
 	case "Streamdeck Studio":
 		return gift.New(
 			gift.Resize(width, height, gift.LanczosResampling),

@@ -430,8 +430,11 @@ func (d *Device) eventListener() {
 		buttonTime[i] = time.Now()
 	}
 
-	// All for Streamdeck Plus:
+	// Encoders on Streamdeck Plus and Plus XL:
 	numberOfEncoders := 4
+	if d.deviceType.name == "Streamdeck Plus XL" {
+		numberOfEncoders = 6
+	}
 	encoderReadOffset := 5
 	encoderButtonTime := make([]time.Time, numberOfEncoders)
 	for i := range encoderButtonTime {
@@ -471,7 +474,7 @@ func (d *Device) eventListener() {
 			break
 		}
 		if data[0] == 1 { // Seems like the first byte is always one for events...
-			if (d.deviceType.name == "Streamdeck Plus" || d.deviceType.name == "Streamdeck Studio") && data[1] > 0 { // We should basically be able to avoid this condition and just have one big switch...
+			if (d.deviceType.name == "Streamdeck Plus" || d.deviceType.name == "Streamdeck Plus XL" || d.deviceType.name == "Streamdeck Studio") && data[1] > 0 { // We should basically be able to avoid this condition and just have one big switch...
 				switch data[1] {
 				case 0xa: // Assumed "Keep alive" on the Stream Deck Studio:
 					//log.Println("Received assumed keep alive from Stream Deck - sending back 03 1a reply")
@@ -806,6 +809,12 @@ func (d *Device) WriteRawImageToAreaUnscaled(x, y int, rawImg image.Image) error
 	img := rawImg
 	if d.GetName() == "Streamdeck Neo" { // Rotate Info Display for Streamdeck Neo
 		g := gift.New(gift.Rotate180())
+		newimg := image.NewRGBA(g.Bounds(rawImg.Bounds()))
+		g.Draw(newimg, rawImg)
+		img = newimg
+	}
+	if d.GetName() == "Streamdeck Plus XL" { // The touch strip takes images rotated 90 degrees counter-clockwise (the area header keeps the logical size)
+		g := gift.New(gift.Rotate90())
 		newimg := image.NewRGBA(g.Bounds(rawImg.Bounds()))
 		g.Draw(newimg, rawImg)
 		img = newimg
