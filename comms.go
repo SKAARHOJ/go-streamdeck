@@ -1,6 +1,8 @@
 package streamdeck
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -8,7 +10,9 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"io"
 	"net"
+	"strconv"
 	"time"
 	"unicode"
 
@@ -94,7 +98,8 @@ type DeviceInterface interface {
 type Device struct {
 	fd         DeviceInterface
 	deviceType deviceType
-	isIP       bool
+	isIP       bool      // Legacy TCP (Stream Deck Studio); keepalives are handled in eventListener
+	parent     io.Closer // Network Dock connection, when the device is attached to one
 
 	buttonPressListeners     []func(int, *Device, error, bool)
 	encoderPushListeners     []func(int, *Device, bool)
@@ -166,16 +171,63 @@ func rawOpen(reset bool, serial string) (*Device, error) {
 	return nil, errors.New("Found an Elgato device, but not one for which there is a definition; have you imported the devices package?")
 }
 
-// Open a Stream Deck device (Stream Deck Studio) on TCP
+// dialTCP connects to a network Stream Deck and tells if it uses the Cora protocol (Network Dock).
+// The unit talks first (keepalive), so the protocol is seen by peeking at the first bytes.
+// Read through the returned reader, as it holds the peeked bytes.
+func dialTCP(serverAddr string) (net.Conn, *bufio.Reader, bool, error) {
+	conn, err := net.DialTimeout("tcp", serverAddr, 3*time.Second)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	reader := bufio.NewReaderSize(conn, 16384)
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	first, err := reader.Peek(len(coraMagic))
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+			conn.Close() // Closed by the unit (e.g. a Network Dock still busy with a previous connection)
+			return nil, nil, false, err
+		}
+	}
+	return conn, reader, bytes.Equal(first, coraMagic), nil
+}
+
+// DefaultTCPPort is the port Elgato network units (Stream Deck Studio, Network Dock) listen on
+const DefaultTCPPort = 5343
+
+// Open a Stream Deck on TCP: a Stream Deck Studio, or a Stream Deck attached to a Network Dock
 func OpenTCP(IP string) (*Device, error) {
 
 	// Server address and port
-	serverAddr := IP + ":5343"
+	serverAddr := net.JoinHostPort(IP, strconv.Itoa(DefaultTCPPort))
 
 	// Connect to the TCP server in the Stream Deck
-	conn, err := net.Dial("tcp", serverAddr)
+	conn, reader, isCora, err := dialTCP(serverAddr)
 	if err != nil {
 		return nil, err
+	}
+	if isCora {
+		log.Debugf("Stream Deck at %s uses the Cora protocol\n", serverAddr)
+		for attempt := 1; ; attempt++ {
+			d, err := openCora(IP, newCoraConn(conn, reader))
+			if err != errCoraWritesIgnored || attempt == 3 {
+				return d, err
+			}
+			log.Debugf("%v, reconnecting (attempt %d)\n", err, attempt+1)
+			for {
+				time.Sleep(time.Second) // The dock needs a moment after a connection closes
+				conn, reader, isCora, err = dialTCP(serverAddr)
+				if err == nil && isCora {
+					break
+				}
+				if err == nil {
+					conn.Close()
+				}
+				if attempt++; attempt == 3 {
+					return nil, errors.New("couldn't reconnect to Network Dock")
+				}
+			}
+		}
 	}
 
 	// Asking for serial:
@@ -192,7 +244,7 @@ func OpenTCP(IP string) (*Device, error) {
 	for serialNumber == "" {
 		// Reading reply for Serial:
 		data := make([]byte, 1024) // 1024 for TCP, 256 was enough for USB
-		n, err := conn.Read(data)
+		n, err := reader.Read(data)
 		if err != nil {
 			return nil, err
 		}
@@ -216,7 +268,7 @@ func OpenTCP(IP string) (*Device, error) {
 			retval.isIP = true
 			retval.deviceType.serial = serialNumber //"IP_" + IP // Temp-serial...
 
-			retval.fd = &TCPClient{conn: conn}
+			retval.fd = &TCPClient{conn: conn, reader: reader}
 
 			go retval.eventListener()
 			return retval, nil
@@ -255,6 +307,9 @@ func (d *Device) GetUSBProductId() int {
 // Close the device
 func (d *Device) Close() {
 	d.fd.Close()
+	if d.parent != nil {
+		d.parent.Close()
+	}
 }
 
 // SetBrightness sets the button brightness

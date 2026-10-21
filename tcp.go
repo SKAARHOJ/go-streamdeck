@@ -1,11 +1,13 @@
 package streamdeck
 
 import (
+	"io"
 	"net"
 )
 
 type TCPClient struct {
-	conn net.Conn
+	conn   net.Conn
+	reader io.Reader // Reads go through this when set (it may hold already peeked bytes)
 }
 
 func (t *TCPClient) Close() error {
@@ -30,5 +32,8 @@ func (t *TCPClient) Write(data []byte) (int, error) {
 }
 
 func (t *TCPClient) Read(data []byte) (int, error) {
+	if t.reader != nil {
+		return t.reader.Read(data)
+	}
 	return t.conn.Read(data)
 }
