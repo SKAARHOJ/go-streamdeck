@@ -306,7 +306,9 @@ func (d *Device) GetUSBProductId() int {
 
 // Close the device
 func (d *Device) Close() {
-	d.fd.Close()
+	if d.fd != nil { // Nil for virtual devices
+		d.fd.Close()
+	}
 	if d.parent != nil {
 		d.parent.Close()
 	}
@@ -315,6 +317,9 @@ func (d *Device) Close() {
 // SetBrightness sets the button brightness
 // pct is an integer between 0-100
 func (d *Device) SetBrightness(pct int) {
+	if d.fd == nil {
+		return // Virtual device
+	}
 	if pct < 0 {
 		pct = 0
 	}
@@ -337,6 +342,9 @@ func (d *Device) ClearButtons() {
 
 // WriteColorToButton writes a specified color to the given button
 func (d *Device) WriteColorToButton(btnIndex int, colour color.Color) error {
+	if d.fd == nil {
+		return nil // Virtual device
+	}
 	btnIndex = int(d.mapButtonIn(uint(btnIndex)))
 	if !d.HasImageCapability() {
 		return errors.New("Button doesn't have image capability")
@@ -352,6 +360,9 @@ func (d *Device) WriteColorToButton(btnIndex int, colour color.Color) error {
 
 // WriteEncoderColor sets the color of an encoder
 func (d *Device) WriteColorToEncoder(encIndex int, colour color.Color) {
+	if d.fd == nil {
+		return // Virtual device
+	}
 	// Use the RGBA method to get the color components in the range of 0 to 65535.
 	r16, g16, b16, _ := colour.RGBA()
 
@@ -368,6 +379,9 @@ func (d *Device) WriteColorToEncoder(encIndex int, colour color.Color) {
 
 // WriteEncoderColor sets the color of an encoder
 func (d *Device) WriteColorToEncoderRing(encIndex int, colours []color.Color, offset uint16) {
+	if d.fd == nil {
+		return // Virtual device
+	}
 
 	usbdata := make([]byte, 1024)
 	usbdata[0] = 0x02
@@ -654,6 +668,9 @@ func (d *Device) NFCdata(f func(*Device, []byte)) {
 
 // ResetComms will reset the comms protocol to the StreamDeck; useful if things have gotten de-synced, but it will also reboot the StreamDeck
 func (d *Device) ResetComms() {
+	if d.fd == nil {
+		return // Virtual device
+	}
 	payload := d.deviceType.resetPacket
 	d.fd.SendFeatureReport(payload)
 }
@@ -711,6 +728,9 @@ func generateStripedImage(width, height int, mode int) image.Image {
 
 // WriteRawImageToButton takes an `image.Image` and writes it to the given button, after resizing and rotating the image to fit the button (for some reason the StreamDeck screens are all upside down)
 func (d *Device) WriteRawImageToButton(btnIndex int, rawImg image.Image) error {
+	if d.fd == nil {
+		return nil // Virtual device
+	}
 	btnIndex = int(d.mapButtonIn(uint(btnIndex)))
 	if !d.HasImageCapability() {
 		return errors.New("Button doesn't have image capability")
@@ -729,6 +749,9 @@ func (d *Device) WriteRawImageToButton(btnIndex int, rawImg image.Image) error {
 }
 
 func (d *Device) rawWriteToButton(btnIndex int, rawImage []byte) error {
+	if d.fd == nil {
+		return nil // Virtual device
+	}
 	// Based on set_key_image from https://github.com/abcminiuser/python-elgato-streamdeck/blob/master/src/StreamDeck/Devices/StreamDeckXL.py#L151
 
 	if Min(Max(btnIndex, 0), int(d.deviceType.numberOfButtons)) != btnIndex {
@@ -777,6 +800,9 @@ func (d *Device) rawWriteToButton(btnIndex int, rawImage []byte) error {
 
 // y doesn't work, keep it zero!
 func (d *Device) WriteRawImageToAreaUnscaled(x, y int, rawImg image.Image) error {
+	if d.fd == nil {
+		return nil // Virtual device
+	}
 	img := rawImg
 	if d.GetName() == "Streamdeck Neo" { // Rotate Info Display for Streamdeck Neo
 		g := gift.New(gift.Rotate180())
@@ -795,6 +821,9 @@ func (d *Device) WriteRawImageToAreaUnscaled(x, y int, rawImg image.Image) error
 
 // y doesn't work, keep it zero!
 func (d *Device) rawWriteToArea(x, y, width, height int, rawImage []byte) error {
+	if d.fd == nil {
+		return nil // Virtual device
+	}
 	pageNumber := 0
 	bytesRemaining := len(rawImage)
 	bytesSent := 0
