@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 	"unicode"
 
@@ -98,9 +99,11 @@ type DeviceInterface interface {
 type Device struct {
 	fd         DeviceInterface
 	deviceType deviceType
-	isIP       bool      // Legacy TCP (Stream Deck Studio); keepalives are handled in eventListener
-	parent     io.Closer // Network Dock connection, when the device is attached to one
+	isIP       bool           // Legacy TCP (Stream Deck Studio); keepalives are handled in eventListener
+	parent     io.Closer      // Network Dock connection, when the device is attached to one
+	rt         *deviceRuntime // Writer, reader and closing; nil for virtual devices
 
+	listenersMU              sync.RWMutex
 	buttonPressListeners     []func(int, *Device, error, bool)
 	encoderPushListeners     []func(int, *Device, bool)
 	encoderRotationListeners []func(int, *Device, int)
@@ -160,9 +163,10 @@ func rawOpen(reset bool, serial string) (*Device, error) {
 					}
 					retval.fd = dev
 					if reset {
-						retval.ResetComms()
+						dev.SendFeatureReport(retval.deviceType.resetPacket)
 					}
-					go retval.eventListener()
+					retval.start()
+					retval.startReader()
 					return retval, nil
 				}
 			}
@@ -270,7 +274,8 @@ func OpenTCP(IP string) (*Device, error) {
 
 			retval.fd = &TCPClient{conn: conn, reader: reader}
 
-			go retval.eventListener()
+			retval.start()
+			retval.startReader()
 			return retval, nil
 		}
 	}
@@ -304,16 +309,6 @@ func (d *Device) GetUSBProductId() int {
 	return int(d.deviceType.usbProductID)
 }
 
-// Close the device
-func (d *Device) Close() {
-	if d.fd != nil { // Nil for virtual devices
-		d.fd.Close()
-	}
-	if d.parent != nil {
-		d.parent.Close()
-	}
-}
-
 // SetBrightness sets the button brightness
 // pct is an integer between 0-100
 func (d *Device) SetBrightness(pct int) {
@@ -328,8 +323,11 @@ func (d *Device) SetBrightness(pct int) {
 	}
 
 	preamble := d.deviceType.brightnessPacket
-	payload := append(preamble, byte(pct))
-	d.fd.SendFeatureReport(payload)
+	payload := append(append([]byte{}, preamble...), byte(pct))
+	d.enqueue(writeKey{kind: keyBrightness}, func(fd DeviceInterface) error {
+		_, err := fd.SendFeatureReport(payload)
+		return err
+	})
 }
 
 // ClearButtons writes a black square to all buttons
@@ -374,7 +372,10 @@ func (d *Device) WriteColorToEncoder(encIndex int, colour color.Color) {
 	usbdata[4] = uint8(g16 >> 8) // G
 	usbdata[5] = uint8(b16 >> 8) // B
 
-	d.fd.Write(usbdata)
+	d.enqueue(writeKey{kind: keyEncoderColor, index: encIndex}, func(fd DeviceInterface) error {
+		_, err := fd.Write(usbdata)
+		return err
+	})
 }
 
 // WriteEncoderColor sets the color of an encoder
@@ -403,7 +404,10 @@ func (d *Device) WriteColorToEncoderRing(encIndex int, colours []color.Color, of
 		usbdata[5+a*3] = uint8(b16 >> 8) // B
 	}
 
-	d.fd.Write(usbdata)
+	d.enqueue(writeKey{kind: keyEncoderRing, index: encIndex}, func(fd DeviceInterface) error {
+		_, err := fd.Write(usbdata)
+		return err
+	})
 }
 
 // WriteImageToButton writes a specified image file to the given button
@@ -422,6 +426,18 @@ func (d *Device) WriteImageToButton(btnIndex int, filename string) error {
 }
 
 func (d *Device) eventListener() {
+	var exitErr error
+	defer func() {
+		close(d.rt.readerDone) // First, so Close may be called from the listeners below
+		if exitErr == ErrClosed {
+			log.Debugf("Stopped reading from Stream Deck %s\n", d.GetSerial())
+		} else {
+			log.Printf("Error reading from connection: %v\n", exitErr)
+		}
+		d.sendButtonPressEvent(-1, exitErr)
+		go d.Close() // Release the device and stop the writer, if the application doesn't
+	}()
+
 	var buttonMask []bool
 	buttonMask = make([]bool, d.deviceType.numberOfButtons)
 
@@ -450,12 +466,16 @@ func (d *Device) eventListener() {
 	if d.isIP {
 		go func() {
 			for {
-				time.Sleep(1 * time.Second) // Check every second
+				select { // Check every second
+				case <-d.rt.closing:
+					return
+				case <-time.After(time.Second):
+				}
 				// Load the last data time atomically
 				lastTime := lastIncomingDataTime.Load()
 				if time.Since(lastTime) > 5*time.Second {
 					log.Println("No data received within 5 seconds, closing connection")
-					d.fd.Close()
+					d.fd.Close() // Safe on TCP, and stops the reader
 					return
 				}
 			}
@@ -466,12 +486,11 @@ func (d *Device) eventListener() {
 
 		// Incoming buffer:
 		data := make([]byte, 1024) // 1024 for TCP, 256 was enough for USB
-		_, err := d.fd.Read(data)
+		_, err := d.readInput(data)
 
 		if err != nil {
-			log.Printf("Error reading from connection: %v\n", err)
-			d.sendButtonPressEvent(-1, err)
-			break
+			exitErr = err
+			return
 		}
 		if data[0] == 1 { // Seems like the first byte is always one for events...
 			if (d.deviceType.name == "Streamdeck Plus" || d.deviceType.name == "Streamdeck Plus XL" || d.deviceType.name == "Streamdeck Studio") && data[1] > 0 { // We should basically be able to avoid this condition and just have one big switch...
@@ -485,12 +504,13 @@ func (d *Device) eventListener() {
 					response[0] = 0x03
 					response[1] = 0x1a
 
-					// Send the response back to the server
+					// Send the response back to the server. Written directly, so it isn't held up behind
+					// image data; it's TCP only, where each write is sent in one piece.
 					_, err = d.fd.Write(response)
 					if err != nil {
 						log.Printf("Error sending keep alive response to server: %v\n", err)
-						d.sendButtonPressEvent(-1, err)
-						break
+						exitErr = err
+						return
 					}
 
 				case 4: // NFC
@@ -598,75 +618,108 @@ func (d *Device) mapButtonIn(btnIndex uint) int {
 }
 
 func (d *Device) sendButtonPressEvent(btnIndex int, err error) {
-	for _, f := range d.buttonPressListeners {
+	d.listenersMU.RLock() // Copied, so a listener may register new listeners
+	listeners := append(d.buttonPressListeners[:0:0], d.buttonPressListeners...)
+	d.listenersMU.RUnlock()
+	for _, f := range listeners {
 		f(btnIndex, d, err, true)
 	}
 }
 
 func (d *Device) sendButtonReleaseEvent(btnIndex int, err error) {
-	for _, f := range d.buttonPressListeners {
+	d.listenersMU.RLock() // Copied, so a listener may register new listeners
+	listeners := append(d.buttonPressListeners[:0:0], d.buttonPressListeners...)
+	d.listenersMU.RUnlock()
+	for _, f := range listeners {
 		f(btnIndex, d, err, false)
 	}
 }
 
 func (d *Device) sendEncoderPushEvent(btnIndex int, pressed bool) {
-	for _, f := range d.encoderPushListeners {
+	d.listenersMU.RLock() // Copied, so a listener may register new listeners
+	listeners := append(d.encoderPushListeners[:0:0], d.encoderPushListeners...)
+	d.listenersMU.RUnlock()
+	for _, f := range listeners {
 		f(btnIndex, d, pressed)
 	}
 }
 
 func (d *Device) sendEncoderRotateEvent(btnIndex int, pulses int) {
-	for _, f := range d.encoderRotationListeners {
+	d.listenersMU.RLock() // Copied, so a listener may register new listeners
+	listeners := append(d.encoderRotationListeners[:0:0], d.encoderRotationListeners...)
+	d.listenersMU.RUnlock()
+	for _, f := range listeners {
 		f(btnIndex, d, pulses)
 	}
 }
 
 func (d *Device) sendTouchPushEvent(xpos, ypos uint16, hold bool) {
-	for _, f := range d.touchPushListeners {
+	d.listenersMU.RLock() // Copied, so a listener may register new listeners
+	listeners := append(d.touchPushListeners[:0:0], d.touchPushListeners...)
+	d.listenersMU.RUnlock()
+	for _, f := range listeners {
 		f(d, xpos, ypos, hold)
 	}
 }
 
 func (d *Device) sendTouchSwipeEvent(xstart, ystart, xstop, ystop uint16) {
-	for _, f := range d.touchSwipeListeners {
+	d.listenersMU.RLock() // Copied, so a listener may register new listeners
+	listeners := append(d.touchSwipeListeners[:0:0], d.touchSwipeListeners...)
+	d.listenersMU.RUnlock()
+	for _, f := range listeners {
 		f(d, xstart, ystart, xstop, ystop)
 	}
 }
 
 func (d *Device) sendNFCEvent(nfcdata []byte) {
-	for _, f := range d.nfcListeners {
+	d.listenersMU.RLock() // Copied, so a listener may register new listeners
+	listeners := append(d.nfcListeners[:0:0], d.nfcListeners...)
+	d.listenersMU.RUnlock()
+	for _, f := range listeners {
 		f(d, nfcdata)
 	}
 }
 
 // ButtonPress registers a callback to be called whenever a button is pressed (or connection is lost!)
 func (d *Device) ButtonPress(f func(int, *Device, error, bool)) {
+	d.listenersMU.Lock()
 	d.buttonPressListeners = append(d.buttonPressListeners, f)
+	d.listenersMU.Unlock()
 }
 
 // EncoderPress registers a callback to be called whenever an encoder is pressed
 func (d *Device) EncoderPress(f func(int, *Device, bool)) {
+	d.listenersMU.Lock()
 	d.encoderPushListeners = append(d.encoderPushListeners, f)
+	d.listenersMU.Unlock()
 }
 
 // EncoderRotate registers a callback to be called whenever an encoder is rotated
 func (d *Device) EncoderRotate(f func(int, *Device, int)) {
+	d.listenersMU.Lock()
 	d.encoderRotationListeners = append(d.encoderRotationListeners, f)
+	d.listenersMU.Unlock()
 }
 
 // TouchPush registers a callback to be called whenever the touch area is pushed (tap or hold)
 func (d *Device) TouchPush(f func(*Device, uint16, uint16, bool)) {
+	d.listenersMU.Lock()
 	d.touchPushListeners = append(d.touchPushListeners, f)
+	d.listenersMU.Unlock()
 }
 
 // TouchSwipe registers a callback to be called whenever the touch area is swiped
 func (d *Device) TouchSwipe(f func(*Device, uint16, uint16, uint16, uint16)) {
+	d.listenersMU.Lock()
 	d.touchSwipeListeners = append(d.touchSwipeListeners, f)
+	d.listenersMU.Unlock()
 }
 
 // NFC registers a callback to be called whenever the NFC reader is used
 func (d *Device) NFCdata(f func(*Device, []byte)) {
+	d.listenersMU.Lock()
 	d.nfcListeners = append(d.nfcListeners, f)
+	d.listenersMU.Unlock()
 }
 
 // ResetComms will reset the comms protocol to the StreamDeck; useful if things have gotten de-synced, but it will also reboot the StreamDeck
@@ -675,7 +728,10 @@ func (d *Device) ResetComms() {
 		return // Virtual device
 	}
 	payload := d.deviceType.resetPacket
-	d.fd.SendFeatureReport(payload)
+	d.enqueue(writeKey{}, func(fd DeviceInterface) error {
+		_, err := fd.SendFeatureReport(payload)
+		return err
+	})
 }
 
 // generateStripedImage creates an image with alternating colored patterns (horizontal, vertical, or checkerboard)
@@ -765,6 +821,7 @@ func (d *Device) rawWriteToButton(btnIndex int, rawImage []byte) error {
 	bytesRemaining := len(rawImage)
 	halfImage := len(rawImage) / 2
 	bytesSent := 0
+	packets := [][]byte{}
 
 	for bytesRemaining > 0 {
 
@@ -791,14 +848,26 @@ func (d *Device) rawWriteToButton(btnIndex int, rawImage []byte) error {
 		payload := append(header, rawImage[bytesSent:(bytesSent+thisLength)]...)
 		padding := make([]byte, imageReportLength-len(payload))
 
-		thingToSend := append(payload, padding...)
-		d.fd.Write(thingToSend)
+		packets = append(packets, append(payload, padding...))
 
 		bytesRemaining = bytesRemaining - thisLength
 		pageNumber = pageNumber + 1
 		bytesSent = bytesSent + thisLength
 	}
+	d.enqueue(writeKey{kind: keyButton, index: btnIndex}, writePackets(packets))
 	return nil
+}
+
+// writePackets returns a write job sending packets in order, stopping at the first error
+func writePackets(packets [][]byte) func(DeviceInterface) error {
+	return func(fd DeviceInterface) error {
+		for _, packet := range packets {
+			if _, err := fd.Write(packet); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 // y doesn't work, keep it zero!
@@ -836,6 +905,7 @@ func (d *Device) rawWriteToArea(x, y, width, height int, rawImage []byte) error 
 	pageNumber := 0
 	bytesRemaining := len(rawImage)
 	bytesSent := 0
+	packets := [][]byte{}
 
 	for bytesRemaining > 0 {
 
@@ -852,13 +922,13 @@ func (d *Device) rawWriteToArea(x, y, width, height int, rawImage []byte) error 
 		payload := append(header, rawImage[bytesSent:(bytesSent+thisLength)]...)
 		padding := make([]byte, imageReportLength-len(payload))
 
-		thingToSend := append(payload, padding...)
-		d.fd.Write(thingToSend)
+		packets = append(packets, append(payload, padding...))
 
 		bytesRemaining = bytesRemaining - thisLength
 		pageNumber = pageNumber + 1
 		bytesSent = bytesSent + thisLength
 	}
+	d.enqueue(writeKey{kind: keyArea, x: x, y: y, w: width, h: height}, writePackets(packets))
 	return nil
 }
 

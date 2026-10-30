@@ -368,7 +368,7 @@ func openCora(host string, primary *coraConn) (*Device, error) {
 			primary.Close()
 			return nil, err
 		}
-		go d.eventListener()
+		d.startReader()
 		return d, nil
 	}
 
@@ -404,9 +404,8 @@ func openCora(host string, primary *coraConn) (*Device, error) {
 	// Make sure writes get through (see errCoraWritesIgnored); the panel is cleared by the application anyway
 	if d.HasImageCapability() {
 		d.WriteColorToButton(0, color.Black)
-		if !childConn.waitForWriteAcks(1500 * time.Millisecond) {
-			childConn.Close()
-			primary.Close()
+		if !d.Flush(1500*time.Millisecond) || !childConn.waitForWriteAcks(1500*time.Millisecond) {
+			d.Close() // Also closes primary
 			return nil, errCoraWritesIgnored
 		}
 	}
@@ -435,7 +434,7 @@ func openCora(host string, primary *coraConn) (*Device, error) {
 		}
 	}()
 
-	go d.eventListener()
+	d.startReader()
 	return d, nil
 }
 
@@ -444,6 +443,7 @@ func newDeviceForProduct(productID uint16, serial string, fd DeviceInterface) (*
 		if devType.usbProductID == productID {
 			d := &Device{fd: fd, deviceType: devType}
 			d.deviceType.serial = serial
+			d.start()
 			return d, nil
 		}
 	}
