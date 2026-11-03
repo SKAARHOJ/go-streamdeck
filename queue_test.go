@@ -65,7 +65,7 @@ func (f *fakeHID) ReadTimeout(b []byte, ms int) (int, error) {
 }
 
 func newTestDevice(fd DeviceInterface) *Device {
-	d := &Device{fd: fd, deviceType: deviceType{name: "Test", numberOfButtons: 4, buttonReadOffset: 1}}
+	d := &Device{fd: fd, deviceType: deviceType{name: "Test", numberOfButtons: 4, buttonReadOffset: 1, brightnessPacket: []byte{0x03, 0x08}}}
 	d.start()
 	d.startReader()
 	return d

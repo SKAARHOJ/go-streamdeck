@@ -323,6 +323,9 @@ func (d *Device) SetBrightness(pct int) {
 	}
 
 	preamble := d.deviceType.brightnessPacket
+	if len(preamble) == 0 {
+		return // Nothing to dim (Pedal)
+	}
 	payload := append(append([]byte{}, preamble...), byte(pct))
 	d.enqueue(writeKey{kind: keyBrightness}, func(fd DeviceInterface) error {
 		_, err := fd.SendFeatureReport(payload)
